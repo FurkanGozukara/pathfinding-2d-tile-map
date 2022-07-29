@@ -1,0 +1,19 @@
+﻿<Window x:Class="Pathfinding_Project.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:Pathfinding_Project"
+        mc:Ignorable="d"
+        Title="MainWindow" Height="450" Width="800">
+    <Grid>
+        <Button Name="btnStartPathFinding" Content="start path finding" HorizontalAlignment="Left" Margin="28,25,0,0" VerticalAlignment="Top" Height="47" Width="158" Click="btnStartPathFinding_Click"/>
+        <Label Name="lblCurrentRouteId" Content="current route id" HorizontalAlignment="Left" Margin="28,100,0,0" VerticalAlignment="Top"/>
+        <Label x:Name="lblCurrentCoordinates" Content="current coordinates" HorizontalAlignment="Left" Margin="28,139,0,0" VerticalAlignment="Top"/>
+        <Label x:Name="lblDictionarySize" Content="dictionary size" HorizontalAlignment="Left" Margin="28,170,0,0" VerticalAlignment="Top"/>
+        <Label x:Name="lblfoundShortestPaths" Content="found shortest paths" HorizontalAlignment="Left" Margin="28,217,0,0" VerticalAlignment="Top"/>
+        <Label x:Name="lblProcessedLocationsCount" Content="processed locations count" HorizontalAlignment="Left" Margin="28,257,0,0" VerticalAlignment="Top"/>
+        <Label x:Name="lblLongestProcessedPath" Content="longest processed path" HorizontalAlignment="Left" Margin="28,300,0,0" VerticalAlignment="Top"/>
+
+    </Grid>
+</Window>
