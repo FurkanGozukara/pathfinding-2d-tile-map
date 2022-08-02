@@ -9,9 +9,14 @@ namespace Pathfinding_Project
 {
     public static class PublicExtensions
     {
-        public static string returnHashedValueOfPath(this List<int> lstPath)
+        public static string returnHashedValueOfPath2(this List<int> lstPath)
         {
             return ComputeSha256Hash(string.Join(" ", lstPath));
+        }
+
+        public static int returnHashedValueOfPath(this List<int> lstPath)
+        {
+            return string.Join(" ", lstPath).GetHashCode();
         }
 
         static string ComputeSha256Hash(string rawData)

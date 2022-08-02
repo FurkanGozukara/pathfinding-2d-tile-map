@@ -41,10 +41,15 @@ namespace Pathfinding_Project
 
         private static object lock_lstGlobalTasks = new object();
 
+
+
         public MainWindow()
         {
             InitializeComponent();
             swWriteTempLogs.AutoFlush = true;
+
+            //var v1=  ThreadPool.SetMinThreads(1000, 1000);
+            //var v2 = ThreadPool.SetMaxThreads(99999, 99999);
         }
 
         private static Dictionary<int, List<int>> dicShortestFoundPaths = new Dictionary<int, List<int>>();
@@ -58,9 +63,22 @@ namespace Pathfinding_Project
 
         private static List<movementDirections> lstMovingDirections = new List<movementDirections>();
 
+        private static List<int> lstdirectionChangeAllowedLocations = new List<int> { };
+
+        private static Dictionary<int, int> dicDirectionChangeCount = new Dictionary<int, int>();//first coordinate and second is number of changes
+
+        private static int irMaxAllowedDirectionChangecount = 4;
+
+
+
         private void processPathFinding()
         {
             init_MapDictionary();
+
+            foreach (movementDirections direction in movementDirections.GetValues(typeof(movementDirections)))
+            {
+                lstMovingDirections.Add(direction);
+            }
 
             foreach (DataRow drwRouteInfo in DbConnection.db_Select_DataTable($"select * from routes where routeid>0 and routeid in ( select distinct routeid from map where shapeType in ({string.Join(",", lstMonsterAreas)})) order by routeid asc").Rows)
             {
@@ -87,6 +105,15 @@ namespace Pathfinding_Project
                     dicPerLocationMaxIteration.Clear();
                 }
 
+                lock (lock_lstGlobalTasks)
+                    foreach (var vrPerTask in lstGlobalTasks.ToList())
+                    {
+                        vrPerTask.Dispose();
+                        lstGlobalTasks.Remove(vrPerTask);
+                    }
+
+                lock (dicDirectionChangeCount)
+                    dicDirectionChangeCount.Clear();
 
                 GC.Collect();
 
@@ -138,10 +165,7 @@ new Action(() =>
 
 
 
-                    foreach (movementDirections direction in movementDirections.GetValues(typeof(movementDirections)))
-                    {
-                        lstMovingDirections.Add(direction);
-                    }
+
 
                     //foreach (movementDirections direction in movementDirections.GetValues(typeof(movementDirections)))
                     //{
@@ -174,9 +198,28 @@ new Action(() =>
 
                     // break;
 
+                    lock (lock_dicShortestFoundPaths)
+                    {
+
+                        if (dicShortestFoundPaths.ContainsKey(currentLoc) == false && lstdirectionChangeAllowedLocations.Contains(currentLoc) == false)
+                        {
+                            lstdirectionChangeAllowedLocations.Add(currentLoc);
+                            currentLoc--;
+                        }
+                    }
 
                 }
 
+                while (true)
+                {
+                    lock (lock_lstGlobalTasks)
+                        if (lstGlobalTasks.Where(pr => pr.Status == TaskStatus.WaitingToRun).Count<Task>() > 0)
+                        {
+                            System.Threading.Thread.Sleep(100);
+                        }
+                        else
+                            break;
+                }
 
                 StringBuilder sbQueries = new StringBuilder();
 
@@ -188,7 +231,7 @@ new Action(() =>
 
                         int irDirection = returnDirection(irLoc, irNext, routeColumnCount);
                         string srFullPath = string.Join(";", vrPerPath.Value.Skip(1));
-                        sbQueries.AppendLine($"insert into tblShortestPath ([RouteId],[CurrentLoc],[Direction],[FullPath]) values ({irRouteId},{vrPerPath.Key},{irDirection},'{srFullPath}');");
+                        sbQueries.AppendLine($"insert into ShortestPath  ([RouteId],[CurrentLoc],[Direction],[FullPath]) values ({irRouteId},{vrPerPath.Key},{irDirection},'{srFullPath}');");
 
                         if (sbQueries.Length > 100000)
                         {
@@ -231,12 +274,15 @@ new Action(() =>
             public bool blTop { get; set; } = false;
             public bool blBottom { get; set; } = false;
 
+            public int irDirectionChangeCount = 0;
+
             public csChosenDirection(csChosenDirection instance)
             {
                 this.blBottom = instance.blBottom;
                 this.blLeft = instance.blLeft;
                 this.blRight = instance.blRight;
                 this.blTop = instance.blTop;
+                this.irDirectionChangeCount = instance.irDirectionChangeCount;
             }
 
             public csChosenDirection()
@@ -250,7 +296,9 @@ new Action(() =>
 
         private static object lock_dicShortestFoundPaths = new object();
 
-        private static HashSet<string> hsCheckedPaths = new HashSet<string>();
+        // private static HashSet<string> hsCheckedPaths = new HashSet<string>();
+
+        private static HashSet<int> hsCheckedPaths = new HashSet<int>();
 
         private static object lock_hsCheckedPaths = new object();
 
@@ -258,7 +306,7 @@ new Action(() =>
         private void checkPossibleMovements(List<int> lstCheckLocations, Dictionary<List<int>, bool> dicPerRouteMappings, int colCount, short irRouteId, movementDirections movementDirection, int rowCount, csChosenDirection csChosenDirection)
         {
 
-            if (Interlocked.Read(ref lrProcessedPossibleLocations) % 1000 == 1)
+            if (Interlocked.Read(ref lrProcessedPossibleLocations) % 10000 == 1)
                 lock (lock_lstGlobalTasks)
                 {
                     Debug.WriteLine($"Running tasks count: {lstGlobalTasks.Where(pr => pr.Status == TaskStatus.Running).Count<Task>()}");
@@ -267,6 +315,7 @@ new Action(() =>
                     Debug.WriteLine($"Canceled tasks count: {lstGlobalTasks.Where(pr => pr.Status == TaskStatus.Canceled).Count<Task>()}");
                     Debug.WriteLine($"WaitingForChildrenToComplete tasks count: {lstGlobalTasks.Where(pr => pr.Status == TaskStatus.WaitingForChildrenToComplete).Count<Task>()}");
                     Debug.WriteLine($"WaitingForActivation tasks count: {lstGlobalTasks.Where(pr => pr.Status == TaskStatus.WaitingForActivation).Count<Task>()}");
+                    Debug.WriteLine($"WaitingToRun tasks count: {lstGlobalTasks.Where(pr => pr.Status == TaskStatus.WaitingToRun).Count<Task>()}");
                 }
 
 
@@ -362,7 +411,7 @@ new Action(() =>
                         int irNewAddedLoc = irLastLocation + colCount;
                         if (blCheckLocationMoveable(irRouteId, irNewAddedLoc))
                         {
-                            if (lstFixedList.Contains(irNewAddedLoc) == false)
+                            if (lstFixedList.Contains(irNewAddedLoc) == false && checkAllowed(csChosenDirection) == true)
                             {
                                 lstFixedList.Add(irNewAddedLoc);
                                 csChosenDirection.blBottom = true;
@@ -383,7 +432,7 @@ new Action(() =>
                         int irNewAddedLoc = irLastLocation - 1;
                         if (blCheckLocationMoveable(irRouteId, irNewAddedLoc))
                         {
-                            if (lstFixedList.Contains(irNewAddedLoc) == false)
+                            if (lstFixedList.Contains(irNewAddedLoc) == false && checkAllowed(csChosenDirection) == true)
                             {
                                 lstFixedList.Add(irNewAddedLoc);
                                 csChosenDirection.blRight = false;
@@ -404,7 +453,7 @@ new Action(() =>
                         int irNewAddedLoc = irLastLocation - colCount;
                         if (blCheckLocationMoveable(irRouteId, irNewAddedLoc))
                         {
-                            if (lstFixedList.Contains(irNewAddedLoc) == false)
+                            if (lstFixedList.Contains(irNewAddedLoc) == false && checkAllowed(csChosenDirection) == true)
                             {
                                 lstFixedList.Add(irNewAddedLoc);
                                 csChosenDirection.blBottom = false;
@@ -425,7 +474,7 @@ new Action(() =>
                         int irNewAddedLoc = irLastLocation + 1;
                         if (blCheckLocationMoveable(irRouteId, irNewAddedLoc))
                         {
-                            if (lstFixedList.Contains(irNewAddedLoc) == false)
+                            if (lstFixedList.Contains(irNewAddedLoc) == false && checkAllowed(csChosenDirection) == true)
                             {
                                 lstFixedList.Add(irNewAddedLoc);
                                 csChosenDirection.blRight = true;
@@ -475,7 +524,7 @@ new Action(() =>
             }
 
 
-            string srHashedPath = lstCopyCheckLocations.returnHashedValueOfPath();
+            var srHashedPath = lstCopyCheckLocations.returnHashedValueOfPath();
 
             lock (lock_hsCheckedPaths)
             {
@@ -483,13 +532,18 @@ new Action(() =>
                     return;
             }
 
+
+
             lock (lock_dicPerLocationMaxIteration)
-                if (dicPerLocationMaxIteration[irOriginalLocation] > 1000000)
+                if (dicPerLocationMaxIteration[irOriginalLocation] > 10000)
                 {
                     lock (lock_dicShortestFoundPaths)
                         if (dicShortestFoundPaths.ContainsKey(irOriginalLocation))
                             return;
-                    return;
+                    if (dicPerLocationMaxIteration[irOriginalLocation] > 1000000)
+                    {
+                        return;
+                    }
                 }
 
             if (lstCopyCheckLocations.Count > irLongestProcessedPath)
@@ -591,11 +645,33 @@ new Action(() =>
                 lstTasks.Add(vrtask);
                 //lock (lock_lstGlobalTasks)
                 //    lstGlobalTasks.Add(vrtask);
+
+                //while (true)
+                //{
+                //    if (vrtask.Status == TaskStatus.WaitingToRun)
+                //    {
+                //        Thread.Sleep(100);
+                //    }
+                //    else
+                //        break;
+                //}
             }
 
-
+            Task.WaitAll(lstTasks.ToArray());
 
         }
+
+        private static bool checkAllowed(csChosenDirection csChosenDirection)
+        {
+            if (csChosenDirection.irDirectionChangeCount > irMaxAllowedDirectionChangecount)
+                return false;
+
+            csChosenDirection.irDirectionChangeCount++;
+
+
+            return true;
+        }
+
         private static object lock_printShortest = new object();
 
         private static bool blCheckLocationMoveable(short irRouteId, int irNextTopLocation)
@@ -637,7 +713,7 @@ new Action(() =>
 
         private static void addHash(List<int> lstCheckLocations)
         {
-            string srHashedPath = lstCheckLocations.returnHashedValueOfPath();
+            var srHashedPath = lstCheckLocations.returnHashedValueOfPath();
 
             lock (lock_hsCheckedPaths)
             {
