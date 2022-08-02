@@ -16,6 +16,7 @@ using System.Data;
 using System.IO;
 using System.Threading;
 using System.Security.Cryptography;
+using System.Diagnostics;
 
 namespace Pathfinding_Project
 {
@@ -30,9 +31,15 @@ namespace Pathfinding_Project
 
         int irLongestProcessedPath = 0;
 
-        Dictionary<int, int> dicPerLocationMaxIteration = new Dictionary<int, int>();
+        private static Dictionary<int, int> dicPerLocationMaxIteration = new Dictionary<int, int>();
 
         private static object lock_dicPerLocationMaxIteration = new object();
+
+        private static object lock_swWriteTempLogs = new object();
+
+        private static List<Task> lstGlobalTasks = new List<Task>();
+
+        private static object lock_lstGlobalTasks = new object();
 
         public MainWindow()
         {
@@ -40,33 +47,48 @@ namespace Pathfinding_Project
             swWriteTempLogs.AutoFlush = true;
         }
 
-        Dictionary<int, List<int>> dicShortestFoundPaths = new Dictionary<int, List<int>>();
+        private static Dictionary<int, List<int>> dicShortestFoundPaths = new Dictionary<int, List<int>>();
 
-        public Dictionary<Int16, Dictionary<int, byte>> dicMapFormat = new Dictionary<Int16, Dictionary<int, byte>>();//first route id, square id and shape id
+        private static Dictionary<Int16, Dictionary<int, byte>> dicMapFormat = new Dictionary<Int16, Dictionary<int, byte>>();//first route id, square id and shape id
 
         private void btnStartPathFinding_Click(object sender, RoutedEventArgs e)
         {
             Task.Factory.StartNew(() => { processPathFinding(); });
         }
-        List<movementDirections> lstMovingDirections = new List<movementDirections>();
+
+        private static List<movementDirections> lstMovingDirections = new List<movementDirections>();
 
         private void processPathFinding()
         {
             init_MapDictionary();
 
-            foreach (DataRow drwRouteInfo in DbConnection.db_Select_DataTable("select * from routes where routeid=23").Rows)
+            foreach (DataRow drwRouteInfo in DbConnection.db_Select_DataTable($"select * from routes where routeid>0 and routeid in ( select distinct routeid from map where shapeType in ({string.Join(",", lstMonsterAreas)})) order by routeid asc").Rows)
             {
                 Int16 irRouteId = Convert.ToInt16(drwRouteInfo["routeId"].ToString());
                 int routeRowCount = Convert.ToInt32(drwRouteInfo["maxRow"].ToString());
                 int routeColumnCount = Convert.ToInt32(drwRouteInfo["maxColumn"].ToString());
+                lock (lock_swWriteTempLogs)
+                {
+                    swWriteTempLogs.Flush();
+                    swWriteTempLogs.Close();
+                    swWriteTempLogs = new StreamWriter("temp_logs_" + irRouteId + ".txt");
+                }
 
-                dicShortestFoundPaths = new Dictionary<int, List<int>>();
+                lock (lock_dicShortestFoundPaths)
+                    dicShortestFoundPaths.Clear();
 
                 lock (lock_hsCheckedPaths)
-                    hsCheckedPaths = new HashSet<string>();
+                {
+                    hsCheckedPaths.Clear();
+                }
 
                 lock (lock_dicPerLocationMaxIteration)
-                    dicPerLocationMaxIteration = new Dictionary<int, int>();
+                {
+                    dicPerLocationMaxIteration.Clear();
+                }
+
+
+                GC.Collect();
 
                 for (int currentLoc = 1; currentLoc < (routeRowCount * routeColumnCount); currentLoc++)
                 {
@@ -139,6 +161,8 @@ new Action(() =>
                     });
 
 
+
+
                     //StreamWriter swWrite = new StreamWriter(currentLoc + ".txt");
                     //swWrite.AutoFlush = true;
                     //foreach (var item in dicPerRouteMappings)
@@ -149,34 +173,37 @@ new Action(() =>
                     //swWrite.Close();
 
                     // break;
+
+
                 }
 
 
                 StringBuilder sbQueries = new StringBuilder();
 
-                foreach (var vrPerPath in dicShortestFoundPaths)
-                {
-                    int irLoc = Convert.ToInt32(vrPerPath.Key);
-                    int irNext = Convert.ToInt32(vrPerPath.Value[1]);
-
-                    int irDirection = returnDirection(irLoc, irNext, routeColumnCount);
-                    string srFullPath = string.Join(";", vrPerPath.Value.Skip(1));
-                    sbQueries.AppendLine($"insert into ShortestPath ([RouteId],[CurrentLoc],[Direction],[FullPath]) values ({irRouteId},{vrPerPath.Key},{irDirection},'{srFullPath}');");
-
-                    if(sbQueries.Length>100000)
+                lock (lock_dicShortestFoundPaths)
+                    foreach (var vrPerPath in dicShortestFoundPaths)
                     {
-                        DbConnection.db_Update_Delete_Query(sbQueries.ToString());
-                        sbQueries = new StringBuilder();
+                        int irLoc = Convert.ToInt32(vrPerPath.Key);
+                        int irNext = Convert.ToInt32(vrPerPath.Value[1]);
+
+                        int irDirection = returnDirection(irLoc, irNext, routeColumnCount);
+                        string srFullPath = string.Join(";", vrPerPath.Value.Skip(1));
+                        sbQueries.AppendLine($"insert into tblShortestPath ([RouteId],[CurrentLoc],[Direction],[FullPath]) values ({irRouteId},{vrPerPath.Key},{irDirection},'{srFullPath}');");
+
+                        if (sbQueries.Length > 100000)
+                        {
+                            DbConnection.db_Update_Delete_Query(sbQueries.ToString());
+                            sbQueries = new StringBuilder();
+                        }
                     }
-                }
 
                 DbConnection.db_Update_Delete_Query(sbQueries.ToString());
 
-                 return;
+                // return;
             }
         }
 
-        private int returnDirection(int irFirst,int irSecond,int irMaxColCount)
+        private static int returnDirection(int irFirst, int irSecond, int irMaxColCount)
         {
             if (irSecond == irFirst + 1)
                 return (int)movementDirections.Right;
@@ -227,8 +254,24 @@ new Action(() =>
 
         private static object lock_hsCheckedPaths = new object();
 
+        private static List<int> lstMonsterAreas = new List<int> { 3, 11, 15, 16, 19 };
         private void checkPossibleMovements(List<int> lstCheckLocations, Dictionary<List<int>, bool> dicPerRouteMappings, int colCount, short irRouteId, movementDirections movementDirection, int rowCount, csChosenDirection csChosenDirection)
         {
+
+            if (Interlocked.Read(ref lrProcessedPossibleLocations) % 1000 == 1)
+                lock (lock_lstGlobalTasks)
+                {
+                    Debug.WriteLine($"Running tasks count: {lstGlobalTasks.Where(pr => pr.Status == TaskStatus.Running).Count<Task>()}");
+                    Debug.WriteLine($"RanToCompletion tasks count: {lstGlobalTasks.Where(pr => pr.Status == TaskStatus.RanToCompletion).Count<Task>()}");
+                    Debug.WriteLine($"Faulted tasks count: {lstGlobalTasks.Where(pr => pr.Status == TaskStatus.Faulted).Count<Task>()}");
+                    Debug.WriteLine($"Canceled tasks count: {lstGlobalTasks.Where(pr => pr.Status == TaskStatus.Canceled).Count<Task>()}");
+                    Debug.WriteLine($"WaitingForChildrenToComplete tasks count: {lstGlobalTasks.Where(pr => pr.Status == TaskStatus.WaitingForChildrenToComplete).Count<Task>()}");
+                    Debug.WriteLine($"WaitingForActivation tasks count: {lstGlobalTasks.Where(pr => pr.Status == TaskStatus.WaitingForActivation).Count<Task>()}");
+                }
+
+
+
+
             // csChosenDirection csChosenDirection = new csChosenDirection(_csChosenDirection);//a deep copy of class type object
 
             if (lstCheckLocations.Contains(2076))
@@ -252,25 +295,25 @@ new Action(() =>
                 }
             }
 
-            if (Interlocked.Read(ref lrProcessedPossibleLocations) % 10000 == 0)
+            if (Interlocked.Read(ref lrProcessedPossibleLocations) % 10000 == 1)
             {
                 Application.Current.Dispatcher.BeginInvoke(
         new Action(() =>
         {
-            lblProcessedLocationsCount.Content = "processed path found " + Interlocked.Read(ref lrProcessedPossibleLocations).ToString("N0");
+            lblProcessedLocationsCount.Content = "total cumulative processed path count : " + Interlocked.Read(ref lrProcessedPossibleLocations).ToString("N0");
         }));
             }
 
+            lock (lock_hsCheckedPaths)
+                if (hsCheckedPaths.Count % 10000 == 1)
+                {
 
-            if (hsCheckedPaths.Count % 1000 == 0)
-            {
-
-                Application.Current.Dispatcher.BeginInvoke(
-    new Action(() =>
-    {
-        lblDictionarySize.Content = "hashset size: " + hsCheckedPaths.Count;
-    }));
-            }
+                    Application.Current.Dispatcher.BeginInvoke(
+        new Action(() =>
+        {
+            lblDictionarySize.Content = "hashset size: " + hsCheckedPaths.Count.ToString("N0");
+        }));
+                }
 
             int irLastLocation = lstCheckLocations.Last();
             int irNextTopLocation = irLastLocation - colCount;
@@ -459,7 +502,7 @@ new Action(() =>
 }));
             }
 
-            if (dicMapFormat[irRouteId][irNextTopLocation] == 3 || dicMapFormat[irRouteId][irNextTopLocation] == 11 || dicMapFormat[irRouteId][irNextTopLocation] == 15 || dicMapFormat[irRouteId][irNextTopLocation] == 19)
+            if (lstMonsterAreas.Contains(dicMapFormat[irRouteId][irNextTopLocation]))
             {
                 //   dicPerRouteMappings.Add(lstCopyCheckLocations, true);
 
@@ -529,14 +572,14 @@ new Action(() =>
             //    checkPossibleMovements(lstCopyCheckLocations, dicPerRouteMappings, colCount, irRouteId, direction, rowCount, csChosenDirection);
             //});
 
-            if(blEnableLogging)
+            if (blEnableLogging)
             {
-                lock (swWriteTempLogs)
+                lock (lock_swWriteTempLogs)
                 {
                     swWriteTempLogs.WriteLine(String.Join(" ", lstCopyCheckLocations));
                 }
             }
-          
+
 
             addHash(lstCopyCheckLocations);
 
@@ -546,18 +589,20 @@ new Action(() =>
             {
                 var vrtask = Task.Factory.StartNew(() => { checkPossibleMovements(new List<int>(lstCopyCheckLocations), dicPerRouteMappings, colCount, irRouteId, direction, rowCount, new csChosenDirection(csChosenDirection)); });
                 lstTasks.Add(vrtask);
+                //lock (lock_lstGlobalTasks)
+                //    lstGlobalTasks.Add(vrtask);
             }
 
-            Task.WaitAll(lstTasks.ToArray());
+
 
         }
         private static object lock_printShortest = new object();
 
-        private bool blCheckLocationMoveable(short irRouteId, int irNextTopLocation)
+        private static bool blCheckLocationMoveable(short irRouteId, int irNextTopLocation)
         {
             if (dicMapFormat[irRouteId].ContainsKey(irNextTopLocation) == false)
                 return false;
-            
+
             if (dicMapFormat[irRouteId][irNextTopLocation] == 1)
             {
                 return false;
@@ -569,7 +614,7 @@ new Action(() =>
             //}
             return true;
         }
-        private void printFoundShortestPaths(Dictionary<int, List<int>> dicFound, int irRouteId)
+        private static void printFoundShortestPaths(Dictionary<int, List<int>> dicFound, int irRouteId)
         {
             lock (lock_printShortest)
             {
@@ -578,7 +623,7 @@ new Action(() =>
 
         }
 
-        private void addListToHash(List<int> lstCheckLocations)
+        private static void addListToHash(List<int> lstCheckLocations)
         {
             addHash(lstCheckLocations);
 
@@ -590,7 +635,7 @@ new Action(() =>
             }
         }
 
-        private void addHash(List<int> lstCheckLocations)
+        private static void addHash(List<int> lstCheckLocations)
         {
             string srHashedPath = lstCheckLocations.returnHashedValueOfPath();
 
@@ -600,7 +645,7 @@ new Action(() =>
             }
         }
 
-        private void init_MapDictionary()
+        private static void init_MapDictionary()
         {
             foreach (DataRow drwRouteInfo in DbConnection.db_Select_DataTable("select routeId,squareId,shapeType from map").Rows)
             {

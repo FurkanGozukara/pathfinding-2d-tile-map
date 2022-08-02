@@ -1,4 +1,5 @@
 C:\Users\King\Desktop\pathfinding project\Pathfinding Project\Pathfinding Project\bin\x64\Debug\net6.0-windows\Pathfinding Project.exe
+C:\Users\King\Desktop\pathfinding project\Pathfinding Project\Pathfinding Project\bin\x64\Debug\net6.0-windows\Pathfinding Project.dll.config
 C:\Users\King\Desktop\pathfinding project\Pathfinding Project\Pathfinding Project\bin\x64\Debug\net6.0-windows\Pathfinding Project.deps.json
 C:\Users\King\Desktop\pathfinding project\Pathfinding Project\Pathfinding Project\bin\x64\Debug\net6.0-windows\Pathfinding Project.runtimeconfig.json
 C:\Users\King\Desktop\pathfinding project\Pathfinding Project\Pathfinding Project\bin\x64\Debug\net6.0-windows\Pathfinding Project.dll
